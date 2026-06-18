@@ -1,0 +1,6 @@
+{
+  "name": "TXAN-AGENT",
+  "description": "A Replit-like web development environment with a built-in AI coding agent, supporting BYOK and multiple model providers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
