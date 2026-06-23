@@ -84,41 +84,135 @@ export function ChatPanel({
       while (shouldContinue && loopCount < maxLoops) {
         setExecutionLogs(prev => [...prev, `🤖 Contacting API (turn ${loopCount + 1})...`]);
         
-        const response = await fetch("/api/chat", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            provider: settings.provider,
-            model: settings.model,
-            apiKey: settings.apiKey,
-            messages: activeHistory.map((m) => {
-              if (m.parts) {
-                return { role: m.role, parts: m.parts };
+        let actualApiKey = settings.apiKey || import.meta.env.VITE_GEMINI_API_KEY || "";
+        
+        let data: any = {};
+        
+        // Fast-path client-side call for Google provider if we have an API key inside Capacitor or Browser
+        if (settings.provider === "google" && actualApiKey) {
+          const { GoogleGenAI } = await import('@google/genai');
+          const ai = new GoogleGenAI({ apiKey: actualApiKey });
+          
+          const formattedMessages = activeHistory.map((m) => ({
+            role: m.role === 'user' ? 'user' : 'model',
+            parts: m.parts || [{ text: m.content || "" }]
+          }));
+
+          const functionDeclarations = [
+            {
+              name: "create_file",
+              description: "Creates a new file in the virtual workspace with the specified name and content.",
+              parameters: {
+                type: "OBJECT",
+                properties: {
+                  name: { type: "STRING", description: "The file name to create (e.g. index.js, package.json)." },
+                  content: { type: "STRING", description: "The file content to write." }
+                },
+                required: ["name", "content"]
               }
-              if (m.tool_calls) {
-                return { role: m.role, content: m.content || null, tool_calls: m.tool_calls };
-              }
-              if (m.role === 'tool') {
-                return { role: m.role, content: m.content, tool_call_id: m.tool_call_id, name: m.name };
-              }
-              return { role: m.role, content: m.content };
-            }),
-            options: {
-              baseUrl: settings.baseUrl,
-              useSearchGrounding: settings.useSearchGrounding,
-              highThinking,
-              systemInstruction: `You are TXAN-AGENT running in ${settings.agentMode.toUpperCase()} mode. You have access to native sandbox terminal operations and a dynamic workspace filesystem. Use your tools whenever needed to list files, read, write, edit, or execute code. Address user instructions directly.`,
             },
-          }),
-        });
+            {
+              name: "edit_file",
+              description: "Modifies an existing file in the virtual workspace by overwriting its content.",
+              parameters: {
+                type: "OBJECT",
+                properties: {
+                  name: { type: "STRING", description: "The file name to edit." },
+                  content: { type: "STRING", description: "The new complete content of the file." }
+                },
+                required: ["name", "content"]
+              }
+            },
+            {
+              name: "read_file",
+              description: "Reads the contents of an existing file.",
+              parameters: {
+                type: "OBJECT",
+                properties: {
+                  name: { type: "STRING", description: "The file name to read." }
+                },
+                required: ["name"]
+              }
+            },
+            {
+              name: "list_files",
+              description: "Lists all files and folders.",
+              parameters: { type: "OBJECT", properties: {} }
+            },
+            {
+              name: "run_code",
+              description: "Executes the current runnable .js code.",
+              parameters: { type: "OBJECT", properties: {} }
+            }
+          ];
 
-        if (!response.ok) {
-          throw new Error("API Error: " + (await response.text()));
+          const tools: any[] = [{ functionDeclarations }];
+          if (settings.useSearchGrounding) tools.push({ googleSearch: {} });
+
+          const aiOptions: any = {
+             systemInstruction: { parts: [{ text: `You are TXAN-AGENT running in ${settings.agentMode.toUpperCase()} mode. You have access to native sandbox terminal operations and a dynamic workspace filesystem. Use your tools whenever needed to list files, read, write, edit, or execute code. Address user instructions directly.` }] },
+             tools,
+          };
+          
+          if (highThinking) aiOptions.thinkingConfig = { thinkingBudgetTokens: 1024 };
+
+          try {
+            const response = await ai.models.generateContent({
+              model: settings.model || "gemini-2.5-flash",
+              contents: formattedMessages,
+              config: aiOptions
+            });
+
+            if (response.functionCalls && response.functionCalls.length > 0) {
+              data.toolCalls = response.functionCalls.map((fc: any) => ({
+                id: fc.id || `gemini-${Date.now()}`,
+                name: fc.name,
+                args: fc.args
+              }));
+            } else {
+              data.text = response.text;
+            }
+          } catch(err: any) {
+             throw new Error("Local Generation Error: " + err.message);
+          }
+        } else {
+          // Fallback to Express backend
+          const response = await fetch("/api/chat", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              provider: settings.provider,
+              model: settings.model,
+              apiKey: settings.apiKey,
+              messages: activeHistory.map((m) => {
+                if (m.parts) {
+                  return { role: m.role, parts: m.parts };
+                }
+                if (m.tool_calls) {
+                  return { role: m.role, content: m.content || null, tool_calls: m.tool_calls };
+                }
+                if (m.role === 'tool') {
+                  return { role: m.role, content: m.content, tool_call_id: m.tool_call_id, name: m.name };
+                }
+                return { role: m.role, content: m.content };
+              }),
+              options: {
+                baseUrl: settings.baseUrl,
+                useSearchGrounding: settings.useSearchGrounding,
+                highThinking,
+                systemInstruction: `You are TXAN-AGENT running in ${settings.agentMode.toUpperCase()} mode. You have access to native sandbox terminal operations and a dynamic workspace filesystem. Use your tools whenever needed to list files, read, write, edit, or execute code. Address user instructions directly.`,
+              },
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error("API Error: " + (await response.text()));
+          }
+
+          data = await response.json();
         }
-
-        const data = await response.json();
 
         if (data.toolCalls && data.toolCalls.length > 0) {
           // LLM wants us to run tools!
