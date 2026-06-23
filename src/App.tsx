@@ -9,6 +9,7 @@ import {
   Folder,
   File,
   Cpu,
+  MessageSquare,
 } from "lucide-react";
 import { SettingsModal } from "./components/SettingsModal";
 import { ChatPanel } from "./components/ChatPanel";
@@ -20,13 +21,24 @@ export default function App() {
   const [files, setFiles] = useState<FileNode[]>(INITIAL_FILES);
   const [activeFileId, setActiveFileId] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [activeMobileView, setActiveMobileView] = useState<'files' | 'editor' | 'terminal' | 'chat'>('chat');
   const [output, setOutput] = useState<string>(
     "TXAN-AGENT Terminal v1.0.0\\nReady.\\n",
   );
 
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem("txanSettings");
-    if (saved) return JSON.parse(saved);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (!parsed.customModels) {
+          parsed.customModels = [];
+        }
+        return parsed;
+      } catch (e) {
+        // ignore fallback
+      }
+    }
     return {
       provider: "google",
       apiKey: "",
@@ -35,6 +47,7 @@ export default function App() {
       highThinking: false,
       agentMode: "agent",
       powerMode: "economic",
+      customModels: [],
     };
   });
 
@@ -88,6 +101,83 @@ export default function App() {
     }
   };
 
+  const agentCreateFile = (name: string, content: string) => {
+    const existing = files.find(f => !f.isFolder && f.name.toLowerCase() === name.toLowerCase());
+    if (existing) {
+      setFiles(prev => prev.map(f => f.id === existing.id ? { ...f, content } : f));
+      setActiveFileId(existing.id);
+      return `File '${name}' already existed; overwrote its content successfully.`;
+    }
+    const newFile: FileNode = {
+      id: (Date.now() + Math.random()).toString(),
+      name,
+      content,
+      isFolder: false,
+      parentId: null
+    };
+    setFiles(prev => [...prev, newFile]);
+    setActiveFileId(newFile.id);
+    return `File '${name}' created successfully containing ${content.length} characters.`;
+  };
+
+  const agentEditFile = (name: string, content: string) => {
+    const existing = files.find(f => !f.isFolder && f.name.toLowerCase() === name.toLowerCase());
+    if (!existing) {
+      return agentCreateFile(name, content);
+    }
+    setFiles(prev => prev.map(f => f.id === existing.id ? { ...f, content } : f));
+    setActiveFileId(existing.id);
+    return `File '${name}' overwritten with new content successfully.`;
+  };
+
+  const agentReadFile = (name: string) => {
+    const file = files.find(f => !f.isFolder && f.name.toLowerCase() === name.toLowerCase());
+    if (!file) return `Error: File '${name}' not found in workspace.`;
+    return file.content;
+  };
+
+  const agentListFiles = () => {
+    if (files.length === 0) return "The workspace is currently empty.";
+    return files.map(f => `${f.isFolder ? '[Folder]' : '[File]'} ${f.name}`).join('\n');
+  };
+
+  const agentRunCode = () => {
+    let runnable = activeFile;
+    if (!runnable || !runnable.name.endsWith('.js')) {
+      runnable = files.find(f => f.name.endsWith('.js'));
+    }
+    if (!runnable) {
+      return "Error: No runnable Javascript (.js) files exist. Please create index.js first.";
+    }
+
+    setOutput(prev => prev + `\n> Agent Triggered Run: ${runnable!.name}...\n`);
+    let runResult = "";
+    try {
+      const safeConsoleLog = (...args: any[]) => {
+        const val = args.join(" ");
+        runResult += val + "\n";
+      };
+      const originalLog = console.log;
+      console.log = safeConsoleLog;
+
+      try {
+        const fn = new Function(runnable!.content);
+        const res = fn();
+        if (res !== undefined) {
+          runResult += `Return: ${res}\n`;
+        }
+      } finally {
+        console.log = originalLog;
+      }
+      
+      setOutput(prev => prev + runResult);
+      return `Executed ${runnable!.name} in terminal sandbox. Log outputs:\n${runResult || "(no console logs produced)"}`;
+    } catch (e: any) {
+      setOutput(prev => prev + `Error: ${e.message}\n`);
+      return `Execution Error in ${runnable!.name}: ${e.message}`;
+    }
+  };
+
   const handleCreateFile = () => {
     const name = prompt("Enter file name:");
     if (!name) return;
@@ -128,7 +218,12 @@ export default function App() {
               : "text-[#a1a1a1]")
           }
           style={{ paddingLeft: depth * 12 + 12 + "px" }}
-          onClick={() => !file.isFolder && setActiveFileId(file.id)}
+          onClick={() => {
+            if (!file.isFolder) {
+              setActiveFileId(file.id);
+              setActiveMobileView("editor");
+            }
+          }}
         >
           {file.isFolder ? (
             <span className="text-orange-400 text-xs">📁</span>
@@ -161,8 +256,8 @@ export default function App() {
             </div>
             <span className="font-bold text-sm tracking-tight">TXAN-AGENT</span>
           </div>
-          <div className="h-4 w-[1px] bg-[#2a2a2d] mx-2" />
-          <div className="flex items-center space-x-2 text-xs text-[#a1a1a1]">
+          <div className="h-4 w-[1px] bg-[#2a2a2d] mx-2 hidden sm:block" />
+          <div className="hidden sm:flex items-center space-x-2 text-xs text-[#a1a1a1]">
             <span className="hover:text-white cursor-pointer">workspace</span>
             <span>/</span>
             <span className="text-white font-medium">txan-project</span>
@@ -176,29 +271,29 @@ export default function App() {
             </span>
           </div>
         </div>
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-2 sm:space-x-3">
           <button
             onClick={handleRun}
-            className="flex items-center space-x-2 bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 px-3 py-1.5 rounded text-xs font-semibold hover:bg-cyan-500/30 transition-colors"
+            className="flex items-center space-x-1.5 sm:space-x-2 bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-bold sm:font-semibold hover:bg-cyan-500/30 transition-colors"
           >
-            <Play size={12} fill="currentColor" />
-            <span>Run</span>
+            <Play size={11} fill="currentColor" />
+            <span className="hidden sm:inline">Run</span>
           </button>
           <button
             onClick={() => setIsSettingsOpen(true)}
-            className="bg-[#2a2a2d] hover:bg-[#3a3a3e] px-3 py-1.5 rounded text-xs font-medium border border-[#3e3e42] text-[#e0e0e0] flex items-center space-x-1 transition-colors hover:text-cyan-400 hover:border-cyan-500/50"
+            className="bg-[#2a2a2d] hover:bg-[#3a3a3e] px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-medium border border-[#3e3e42] text-[#e0e0e0] flex items-center space-x-1 transition-colors hover:text-cyan-400 hover:border-cyan-500/50"
           >
-            <Settings size={14} />
-            <span>Config</span>
+            <Settings size={13} />
+            <span className="hidden sm:inline">Config</span>
           </button>
           <div className="w-7 h-7 bg-gradient-to-tr from-cyan-600 to-blue-500 rounded-full border border-white/20"></div>
         </div>
       </div>
 
       {/* Main Workspace */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden flex-col md:flex-row">
         {/* Sidebar */}
-        <div className="w-64 border-r border-[#2a2a2d] bg-[#0c0c0e] flex flex-col shrink-0">
+        <div className={`w-full md:w-64 border-r border-[#2a2a2d] bg-[#0c0c0e] flex flex-col shrink-0 ${activeMobileView === 'files' ? 'flex-1' : 'hidden md:flex'}`}>
           <div className="p-3 border-b border-[#2a2a2d] flex items-center justify-between">
             <span className="text-[10px] font-bold text-[#6a6a6e] uppercase tracking-widest">
               Files
@@ -222,7 +317,7 @@ export default function App() {
         </div>
 
         {/* Center - Editor & Terminal */}
-        <div className="flex-1 flex flex-col min-w-0 bg-[#0c0c0e]">
+        <div className={`flex-1 flex flex-col min-w-0 bg-[#0c0c0e] ${(activeMobileView === 'editor' || activeMobileView === 'terminal') ? 'flex' : 'hidden md:flex'}`}>
           {/* Editor Header */}
           <div className="h-9 border-b border-[#2a2a2d] bg-[#141417] flex items-center px-2 shrink-0 space-x-1">
             {activeFile && (
@@ -236,7 +331,7 @@ export default function App() {
           </div>
 
           {/* Monaco Editor */}
-          <div className="flex-1 relative">
+          <div className={`flex-1 relative ${activeMobileView === 'terminal' ? 'hidden md:block' : 'block'}`}>
             {activeFile ? (
               <Editor
                 height="100%"
@@ -256,6 +351,7 @@ export default function App() {
                 onChange={handleEditorChange}
                 options={{
                   minimap: { enabled: false },
+                  automaticLayout: true,
                   fontSize: 14,
                   fontFamily: '"JetBrains Mono", monospace',
                   padding: { top: 16 },
@@ -274,7 +370,7 @@ export default function App() {
           </div>
 
           {/* Terminal Panel */}
-          <div className="h-48 border-t border-[#2a2a2d] bg-[#0c0c0e] flex flex-col shrink-0">
+          <div className={`border-t border-[#2a2a2d] bg-[#0c0c0e] flex flex-col shrink-0 ${activeMobileView === 'terminal' ? 'flex-1' : 'h-48 hidden md:flex'}`}>
             <div className="h-8 border-b border-[#2a2a2d] flex items-center justify-between px-4 bg-[#141417]">
               <span className="text-[10px] uppercase tracking-widest text-[#6a6a6e] font-bold">
                 Terminal
@@ -288,13 +384,50 @@ export default function App() {
         </div>
 
         {/* Right - Agent Panel */}
-        <div className="w-[320px] flex flex-col shrink-0">
+        <div className={`w-full md:w-[320px] lg:w-[360px] flex flex-col shrink-0 ${activeMobileView === 'chat' ? 'flex-1' : 'hidden md:flex'}`}>
           <ChatPanel
             settings={settings}
             onUpdateSettings={setSettings}
             fileContext={fileContext}
+            onCreateFile={agentCreateFile}
+            onEditFile={agentEditFile}
+            onReadFile={agentReadFile}
+            onListFiles={agentListFiles}
+            onRunCode={agentRunCode}
           />
         </div>
+      </div>
+
+      {/* Mobile Tab Bar */}
+      <div className="md:hidden h-14 bg-[#141417] border-t border-[#2a2a2d] flex items-center justify-around px-2 shrink-0 z-20">
+        <button
+          onClick={() => setActiveMobileView('files')}
+          className={`flex flex-col items-center justify-center gap-1 text-[10px] uppercase font-bold tracking-wider w-16 h-full transition-colors ${activeMobileView === 'files' ? 'text-cyan-400' : 'text-[#6a6a6e] hover:text-white'}`}
+        >
+          <Folder size={16} />
+          <span>Files</span>
+        </button>
+        <button
+          onClick={() => setActiveMobileView('editor')}
+          className={`flex flex-col items-center justify-center gap-1 text-[10px] uppercase font-bold tracking-wider w-16 h-full transition-colors ${activeMobileView === 'editor' ? 'text-cyan-400' : 'text-[#6a6a6e] hover:text-white'}`}
+        >
+          <FileCode2 size={16} />
+          <span>Editor</span>
+        </button>
+        <button
+          onClick={() => setActiveMobileView('chat')}
+          className={`flex flex-col items-center justify-center gap-1 text-[10px] uppercase font-bold tracking-wider w-16 h-full transition-colors ${activeMobileView === 'chat' ? 'text-cyan-400' : 'text-[#6a6a6e] hover:text-white'}`}
+        >
+          <MessageSquare size={16} />
+          <span>Agent</span>
+        </button>
+        <button
+          onClick={() => setActiveMobileView('terminal')}
+          className={`flex flex-col items-center justify-center gap-1 text-[10px] uppercase font-bold tracking-wider w-16 h-full transition-colors ${activeMobileView === 'terminal' ? 'text-cyan-400' : 'text-[#6a6a6e] hover:text-white'}`}
+        >
+          <Terminal size={16} />
+          <span>Terminal</span>
+        </button>
       </div>
 
       {/* Bottom Status Bar */}

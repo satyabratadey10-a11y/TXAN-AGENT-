@@ -18,6 +18,130 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Model is required' });
     }
 
+    // Modern Workspace Tool Declarations
+    const functionDeclarations = [
+      {
+        name: "create_file",
+        description: "Creates a new file in the virtual workspace with the specified name and content.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            name: { type: "STRING", description: "The file name to create (e.g. index.js, package.json)." },
+            content: { type: "STRING", description: "The file content to write." }
+          },
+          required: ["name", "content"]
+        }
+      },
+      {
+        name: "edit_file",
+        description: "Modifies an existing file in the virtual workspace by overwriting its content.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            name: { type: "STRING", description: "The file name to edit." },
+            content: { type: "STRING", description: "The new complete content of the file." }
+          },
+          required: ["name", "content"]
+        }
+      },
+      {
+        name: "read_file",
+        description: "Reads the contents of an existing file in the virtual workspace.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            name: { type: "STRING", description: "The file name to read." }
+          },
+          required: ["name"]
+        }
+      },
+      {
+        name: "list_files",
+        description: "Lists all files and folders in the workspace.",
+        parameters: {
+          type: "OBJECT",
+          properties: {}
+        }
+      },
+      {
+        name: "run_code",
+        description: "Executes the current runnable .js code in the sandbox environment and returns output.",
+        parameters: {
+          type: "OBJECT",
+          properties: {}
+        }
+      }
+    ];
+
+    const openaiTools = [
+      {
+        type: "function",
+        function: {
+          name: "create_file",
+          description: "Creates a new file in the virtual workspace with the specified name and content.",
+          parameters: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "The file name to create (e.g. index.js, package.json)." },
+              content: { type: "string", description: "The file content to write." }
+            },
+            required: ["name", "content"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "edit_file",
+          description: "Modifies an existing file in the virtual workspace by overwriting its content.",
+          parameters: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "The file name to edit." },
+              content: { type: "string", description: "The new complete content of the file." }
+            },
+            required: ["name", "content"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "read_file",
+          description: "Reads the contents of an existing file in the virtual workspace.",
+          parameters: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "The file name to read." }
+            },
+            required: ["name"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "list_files",
+          description: "Lists all files and folders in the workspace.",
+          parameters: {
+            type: "object",
+            properties: {}
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "run_code",
+          description: "Executes the current runnable .js code in the sandbox environment and returns output.",
+          parameters: {
+            type: "object",
+            properties: {}
+          }
+        }
+      }
+    ];
+
     if (provider === 'google') {
       const actualKey = apiKey || process.env.GEMINI_API_KEY;
       if (!actualKey) {
@@ -28,26 +152,26 @@ app.post('/api/chat', async (req, res) => {
       
       const formattedMessages = messages.map((m: any) => ({
         role: m.role === 'user' ? 'user' : 'model',
-        parts: [{ text: m.content }]
+        parts: m.parts || [{ text: m.content }]
       }));
 
       const systemInstruction = options?.systemInstruction ? {
         parts: [{ text: options.systemInstruction }]
       } : undefined;
 
-      // Ensure Search Grounding is used for flash models if requested
-      const tools = [];
+      // Declare workspace tools + search grounding if requested
+      const tools: any[] = [{ functionDeclarations }];
       if (options?.useSearchGrounding) {
          tools.push({ googleSearch: {} });
       }
 
       const aiOptions: any = {
          systemInstruction,
-         tools: tools.length > 0 ? tools : undefined,
+         tools,
       };
 
       if (options?.highThinking) {
-         aiOptions.thinkingConfig = { thinkingBudgetTokens: 1024 }; // Provide a budget to enable high thinking
+         aiOptions.thinkingConfig = { thinkingBudgetTokens: 1024 };
       }
 
       const response = await ai.models.generateContent({
@@ -55,6 +179,17 @@ app.post('/api/chat', async (req, res) => {
         contents: formattedMessages,
         config: aiOptions
       });
+
+      // Check if candidate has function / tool calls
+      if (response.functionCalls && response.functionCalls.length > 0) {
+        return res.json({
+          toolCalls: response.functionCalls.map((fc: any) => ({
+            id: fc.id || `gemini-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            name: fc.name,
+            args: fc.args
+          }))
+        });
+      }
 
       return res.json({ text: response.text });
     } else if (provider === 'openai' || provider === 'custom') {
@@ -71,7 +206,14 @@ app.post('/api/chat', async (req, res) => {
           },
           body: JSON.stringify({
              model: model,
-             messages: messages,
+             messages: messages.map((m: any) => ({
+                role: m.role,
+                content: m.content,
+                tool_calls: m.tool_calls,
+                name: m.name
+             })),
+             tools: openaiTools,
+             tool_choice: "auto"
           })
        });
        
@@ -81,7 +223,19 @@ app.post('/api/chat', async (req, res) => {
        }
        
        const data = await response.json();
-       return res.json({ text: data.choices[0].message.content });
+       const message = data.choices[0].message;
+
+       if (message.tool_calls && message.tool_calls.length > 0) {
+          return res.json({
+             toolCalls: message.tool_calls.map((tc: any) => ({
+                id: tc.id,
+                name: tc.function.name,
+                args: typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments
+             }))
+          });
+       }
+
+       return res.json({ text: message.content });
     } else {
        return res.status(400).json({ error: 'Unsupported provider' });
     }
