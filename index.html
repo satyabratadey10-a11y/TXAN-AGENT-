@@ -11,10 +11,16 @@
     <title>TXAN Agent Environment</title>
     <script>
       window.addEventListener('error', function(e) {
-        if (e.message && e.message.includes('Script error')) {
+        if (e.message === 'Script error.' || (e.message && e.message.includes('Script error'))) {
           e.preventDefault();
+          e.stopImmediatePropagation();
         }
-      });
+      }, true);
+      window.onerror = function(msg) {
+        if (msg === 'Script error.' || (msg && msg.toString().includes('Script error'))) {
+          return true;
+        }
+      };
     </script>
   </head>
   <body>
