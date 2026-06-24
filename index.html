@@ -9,6 +9,13 @@
     <link rel="apple-touch-icon" href="/icon.svg" />
     <meta name="description" content="TXAN Agent Workspace" />
     <title>TXAN Agent Environment</title>
+    <script>
+      window.addEventListener('error', function(e) {
+        if (e.message && e.message.includes('Script error')) {
+          e.preventDefault();
+        }
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>
