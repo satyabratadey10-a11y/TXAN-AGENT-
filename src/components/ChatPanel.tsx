@@ -77,6 +77,23 @@ export function ChatPanel({
     }
 
     try {
+      if (settings.provider === "custom") {
+        if (!settings.baseUrl) {
+          throw new Error("Base URL is required for custom provider.");
+        }
+        try {
+          const url = new URL(settings.baseUrl);
+          if (!url.protocol.startsWith("http")) {
+            throw new Error("Base URL must start with http:// or https://");
+          }
+        } catch (err: any) {
+          if (err.message.includes("Invalid URL") || err.message.includes("Base URL")) {
+            throw new Error("Invalid Base URL format. Ensure it is a valid URL.");
+          }
+          throw err;
+        }
+      }
+
       let loopCount = 0;
       const maxLoops = 6;
       let shouldContinue = true;
