@@ -207,11 +207,17 @@ export function ChatPanel({
             }),
           });
 
+          let data;
           if (!response.ok) {
             throw new Error("API Error: " + (await response.text()));
           }
 
-          data = await response.json();
+          const textData = await response.text();
+          try {
+            data = JSON.parse(textData);
+          } catch (e) {
+            throw new Error(`Invalid JSON from backend. The server might have restarted or returned an error page. Preview: ${textData.substring(0, 100)}`);
+          }
         }
 
         if (data.toolCalls && data.toolCalls.length > 0) {

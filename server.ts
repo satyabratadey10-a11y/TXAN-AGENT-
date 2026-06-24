@@ -196,13 +196,14 @@ app.post('/api/chat', async (req, res) => {
        if (!apiKey) {
           return res.status(401).json({ error: 'API key is required for this provider' });
        }
-       const baseUrl = options?.baseUrl || 'https://api.openai.com/v1';
+       const baseUrl = (options?.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
        
        const response = await fetch(`${baseUrl}/chat/completions`, {
           method: 'POST',
           headers: {
              'Content-Type': 'application/json',
-             'Authorization': `Bearer ${apiKey}`
+             'Authorization': `Bearer ${apiKey}`,
+             'User-Agent': 'Mozilla/5.0 (compatible; TXAN-AGENT/1.0)'
           },
           body: JSON.stringify({
              model: model,
@@ -217,12 +218,20 @@ app.post('/api/chat', async (req, res) => {
           })
        });
        
+       const textData = await response.text();
+       
        if (!response.ok) {
-          const errorData = await response.text();
-          throw new Error(`API Error: ${response.status} - ${errorData}`);
+          throw new Error(`API Error: ${response.status} - ${textData}`);
        }
        
-       const data = await response.json();
+       let data;
+       try {
+          data = JSON.parse(textData);
+       } catch (e) {
+          console.error("Non-JSON API Response:", textData.substring(0, 500));
+          throw new Error(`API returned non-JSON response (Status ${response.status}). Response preview: ${textData.substring(0, 100)}...`);
+       }
+       
        const message = data.choices[0].message;
 
        if (message.tool_calls && message.tool_calls.length > 0) {
